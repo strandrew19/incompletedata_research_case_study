@@ -1,6 +1,8 @@
 ---
 title: "R Notebook"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 # Data Generation
@@ -19,4 +21,66 @@ colnames(data) <- c("X", "Y", "W")
 
 
 # task a)
+
+The goal is to infer about the regression coefficient for X in the model $Y = \beta_0 + \beta_1X + \varepsilon , \varepsilon \sim N(0, \sigma^2)$. Set aside the first 900 observations as data from the main study and treat the remaining 100 observations as data from a substudy. Fit the above regression model on the main study data and store the point estimates of $\beta_0$, $\beta_1$ and $\sigma^2$ and the interval estimate of $\beta_1$.
+
+```{r}
+
+```
+
+
+# task b)
+
+Create a data corresponding to scenario (a) in Figure 8.1 by deleting X from the main study. Multiply impute the missing values of X in the main study. Perform multiply imputed analysis and again store the point and interval estimates of the same parameters.
+
+* Figure 8.1 not included in the script
+
+```{r}
+
+```
+
+# task c)
+
+Create a data corresponding to scenario (b) by deleting X values from the main study and Y values from the substudy. Multiply impute the missing values of X in the main study. Perform multiply imputed analysis as in (b).
+
+```{r}
+
+```
+
+
+# task d)
+
+Create a data corresponding to scenario (c) by deleting X on the main study, Y from the first 50 subjects in the substudy 172 Missing Data Analysis in Practice
+and W from the last 50 subjects. Perform multiply imputed analysis as in (b).
+
+```{r}
+
+```
+
+
+# task e)
+
+Generate new samples and repeat the process (a) to (d), 250 times.
+
+```{r}
+
+```
+
+
+# task f)
+
+Compare the bias and mean square properties of the estimates of $\beta_0$, $\beta_1$ and $\sigma^2$.
+
+```{r}
+
+```
+
+
+# task g)
+
+Compute the true value of $\beta_1$ and calculate the actual coverage rate for each method of estimating the confidence interval. Also, calculate the length of the confidence intervals.
+
+```{r}
+
+```
 
