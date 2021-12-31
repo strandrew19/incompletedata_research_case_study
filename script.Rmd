@@ -9,6 +9,7 @@ output:
 
 ```{r}
 library(MVN) 
+library(dplyr)
 
 set.seed(420)
 
@@ -25,7 +26,21 @@ colnames(data) <- c("X", "Y", "W")
 The goal is to infer about the regression coefficient for X in the model $Y = \beta_0 + \beta_1X + \varepsilon , \varepsilon \sim N(0, \sigma^2)$. Set aside the first 900 observations as data from the main study and treat the remaining 100 observations as data from a substudy. Fit the above regression model on the main study data and store the point estimates of $\beta_0$, $\beta_1$ and $\sigma^2$ and the interval estimate of $\beta_1$.
 
 ```{r}
+#Set aside first 900 obs as data from main study
+Main <- data %>% slice_head(n = 900)
 
+#Remaining 100 observations as data from a substudy
+Sub <- data %>% slice_tail(n = 100)
+
+#Fit regression model on the main study 
+Main.lm <- lm(Y ~ X, data = Main)
+
+#Generate point estimates for βo, β1, σ  and  interval estimate of β1
+beta_0_main <- lm(Y ~ X, data = Main)$coef[1]
+beta_1_main <- lm(Y ~ X, data = Main)$coef[2]
+Sigma_main <- sigma(Main.lm)
+
+int_est_beta_1 <- confint(Main.lm)[2,]
 ```
 
 
