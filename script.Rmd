@@ -12,6 +12,7 @@ library(dplyr)
 library(MASS)
 library(mice)
 library(VIM)
+library(tidyverse)
 
 set.seed(420)
 
@@ -48,6 +49,8 @@ int_est_beta_1 <- confint(Main.lm)[2,]
 # task b)
 
 Create a data corresponding to scenario (a) in Figure 8.1 by deleting X from the main study. Multiply impute the missing values of X in the main study. Perform multiply imputed analysis and again store the point and interval estimates of the same parameters.
+
+![Figure 8.1.](Figure_8.1.jpg)
 
 * Figure 8.1 not included in the script
 

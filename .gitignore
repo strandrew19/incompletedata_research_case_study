@@ -1,0 +1,4 @@
+*.pdf
+Presentation/
+.Rhistory
+.Rdata
