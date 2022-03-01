@@ -17,10 +17,10 @@ library(tidyverse)
 set.seed(420)
 
 n <- 1000
-mean <- seq(0,2)
+avg <- seq(0,2)
 vcm <- matrix(data = c(1,1,1.7,1,2, 1.5, 1.7, 1.5, 4), nrow = 3, byrow = T)
 
-data <- mvrnorm(1000, mean, vcm) %>% data.frame()
+data <- mvrnorm(1000, avg, vcm) %>% data.frame()
 colnames(data) <- c("X", "Y", "W")
 ```
 
@@ -61,13 +61,17 @@ Main_b["X"] <- NA
 
 #Impute X values of the main dataset
 b_data <- rbind(Main_b, Sub)
-b_imp <- mice(b_data, printFlag = F, maxit = 20)
+b_imp <- mice(b_data, printFlag = F, maxit = 5, method = "pmm")
 
 # Plot
 plot(b_imp)
 
-# fir
+# Regression
+b_reg <- with(b_imp, lm(Y ~ X))
+b_res <- pool(b_reg)
+b_res$pooled
 ```
+
 
 # task c)
 
@@ -83,12 +87,136 @@ Main_c["X"] <- NA
 #Remove Y from Sub dataset
 Sub_c["Y"] <- NA
 
+### We first tried this ### 
+
+# First step: Impute (Y | X, W) for the 100 missing Y
+# Second step: Impute (X | W) for the 900 missing X
+
 c_data <- rbind(Main_c, Sub_c)
-c_imp <- mice(c_data, printFlag = F, maxit = 20)
+
+c_imp <- mice(c_data, printFlag = T, maxit = 1, m= 1, method="midastouch")
+c_imp$predictorMatrix
+
+pred_mat2 <- pred_mat1 <- matrix(rep(0, 9), ncol = 3)
+rownames(pred_mat2) <- rownames(pred_mat1) <- colnames(pred_mat2) <- colnames(pred_mat1) <- c("X", "Y", "W")
+
+pred_mat1["Y", "X"] <- 1
+pred_mat1["Y", "W"] <- 1
+
+pred_mat2["X", "W"] <- 1
+pred_mat2["X", "Y"] <- 1
+
+step_1 <- mice(c_data, printFlag = F, maxit = 20, predictorMatrix = pred_mat1, method = "norm")
+c_data$Y <- complete(step_1)$Y
+
+step_2 <- mice(c_data, printFlag = F, maxit = 20, predictorMatrix = pred_mat2, method = "norm") 
 
 # Plot
-plot(c_imp)
+plot(step_2)
+
+# Regression
+c_reg <- with(step_2, lm(Y ~ X))
+c_res <- pool(c_reg)
+c_res$pooled
+
+### We can combine it into one matrix ###
+
+pred_mat_one_step <- matrix(rep(0, 9), ncol = 3)
+rownames(pred_mat_one_step) <- colnames(pred_mat_one_step) <- c("X", "Y", "W")
+pred_mat_one_step["X","Y"] <- 1
+pred_mat_one_step["X","W"] <- 1
+pred_mat_one_step["Y","X"] <- 1
+pred_mat_one_step["Y", "W"] <- 1
+
+one_step <- mice(c_data, printFlag = F, maxit = 20, predictorMatrix = pred_mat_one_step, method = "norm") 
+one_step_reg <- with(one_step, lm(Y ~ X))
+one_step_res <- pool(one_step_reg)
+one_step_res$pooled
+
+### We get worse results if we leave out y for x 
+pred_mat_compare <- pred_mat_one_step
+pred_mat_compare["X", "Y"] <- 0
+pred_mat_compare["Y", "W"] <- 0
+
+compare <- mice(c_data, printFlag = F, maxit = 20, predictorMatrix = pred_mat_compare, method = "norm") 
+compare_reg <- with(compare, lm(Y ~ X))
+compare_res <- pool(compare_reg)
+compare_res$pooled
 ```
+
+## Stuff Raghunathan talked about in his book
+
+This is how we understand the section from Raghunathan's book: 
+
+```{r}
+Sub_c
+
+model <- summary(lm(X ~ W, Sub_c))
+alpha_0 <- model$coefficients["(Intercept)","Estimate"]
+alpha_1 <- model$coefficients["W","Estimate"]
+tau_squared <- var(model$residuals)
+
+model2 <- summary(lm(Y ~ W, Main_c))
+beta_star_0 <- model2$coefficients["(Intercept)","Estimate"] 
+beta_star_1 <- model2$coefficients["W","Estimate"]
+sigma_star_squared <- var(model2$residuals)
+
+beta_1 <- beta_star_1 / alpha_1 
+beta_0 <- beta_star_0 - beta_1 * alpha_0
+sigma_squared <- sigma_star_squared - beta_1^2 * tau_squared
+
+psi_squared <- ((beta_1^2 / sigma_squared) + (1/tau_squared))^-1
+mux_Y_W <- psi_squared * ((beta_1*(mean(Main_c$Y) - beta_0)) / sigma_squared) + ((alpha_0 + alpha_1 * mean(Main_c$W)) / tau_squared)
+
+Main_c$X <- rnorm(900, mean = mux_Y_W, sd = sqrt(psi_squared))
+
+lm(Y ~ X, Main_c)
+```
+
+## Sequential regression
+
+```{r}
+pred_map_seq <- matrix(rep(0, 9), ncol = 3)
+rownames(pred_map_seq) <- colnames(pred_map_seq) <- c("X", "Y", "W")
+pred_map_seq["Y", "W"] <- 1
+
+c_sequential <- c_data
+c_sequential$Y <- complete(mice(c_data, method = "pmm", print = F, predictorMatrix = pred_map_seq))$Y
+
+pred_x <- pred_y <- matrix(rep(0, 9), ncol = 3)
+rownames(pred_x) <- colnames(pred_x) <- rownames(pred_y) <- colnames(pred_y) <- c("X", "Y", "W")
+
+pred_x["X", "Y"] <- pred_x["X", "W"] <- 1
+pred_y["Y", "X"] <- pred_y["Y", "W"] <- 1
+
+mean_x <- c(var(c_sequential$X))
+mean_y <- c(var(c_sequential$Y))
+
+x_thresh <- 1
+y_thresh <- 1
+
+i <- 1
+
+thresh <- 0.0001
+
+while(is.na(x_thresh) | x_thresh > thresh & y_thresh > thresh){
+  c_sequential$X <- complete(mice(c_sequential, method = "pmm", printFlag = F, predictorMatrix = pred_x))$X
+  c_sequential$Y <- complete(mice(c_sequential, method = "pmm", printFlag = F, predictorMatrix = pred_y))$Y
+  
+  mean_x <- append(mean_x, var(c_sequential$X))
+  mean_y <- append(mean_y, var(c_sequential$Y))
+  
+  i <- i+1
+  
+  x_thresh <- abs(mean_x[i-1] - mean_x[i])
+  y_thresh <- abs(mean_y[i-1] - mean_y[i])
+}
+
+print(i)
+
+lm(Y ~ X, c_sequential)
+```
+
 
 
 # task d)
@@ -116,8 +244,33 @@ d_imp <- mice(d_data, printFlag = F, maxit = 20)
 plot(d_imp)
 
 # Regression
-d_reg <- with(d_imp, lm())
+d_reg <- with(d_imp, lm(Y ~ X))
+d_res <- pool(d_reg)
+d_res$pooled
 ```
+
+```{r}
+Main_d <- Main
+Sub_d <- Sub
+
+#Remove X from Main dataset
+Main_d["X"] <- NA
+#Remove first 50 obs of Y from Sub dataset
+Sub_d[1:50, "Y"] <- NA
+#Remove last 50 obs of W from Sub dataset
+Sub_d[51:100, "W"] <- NA
+
+Sub_d_complete <- complete(mice(Sub_d, print = F))
+
+data_d <- rbind(Main_d, Sub_d_complete)
+
+data_d_impute <- mice(data_d, print = F)
+
+d_reg <- with(data_d_impute, lm(Y ~ X))
+d_res <- pool(d_reg)
+d_res$pooled
+```
+
 
 
 # task e)
@@ -126,12 +279,107 @@ Generate new samples and repeat the process (a) to (d), 250 times.
 
 ```{r}
 
+colnames <- c("beta_0", "beta_1", "b_estimate_0_pmm", "b_estimate_1_pmm", "b_estimate_0_midas", "b_estimate_1_midas", "b_estimate_0_norm" , "b_estimate_1_norm", "c_estimate_0_pmm", "c_estimate_1_pmm", "c_estimate_0_midas", "c_estimate_1_midas", "c_estimate_0_norm", "c_estimate_1_norm", "d_estimate_0_pmm", "d_estimate_1_pmm", "d_estimate_0_midas", "d_estimate_1_midas", "d_estimate_0_norm", "d_estimate_1_norm")
+
+coefs <- data.frame(matrix(ncol=length(colnames),nrow=0, dimnames=list(NULL, colnames)))
+
+methods <- c("pmm", "norm", "midastouch")
+
+for (i in 1:250){
+  set.seed(i)
+  data <- mvrnorm(1000, avg, vcm) %>% data.frame()
+  colnames(data) <- c("X", "Y", "W")
+  
+  #Set aside first 900 obs as data from main study
+  Main <- data %>% slice_head(n = 900)
+  
+  #Remaining 100 observations as data from a substudy
+  Sub <- data %>% slice_tail(n = 100)
+  
+  #Fit regression model on the main study 
+  Main.lm <- lm(Y ~ X, data = Main)
+  beta_0_main <- lm(Y ~ X, data = Main)$coef[1]
+  beta_1_main <- lm(Y ~ X, data = Main)$coef[2]
+  Sigma_main <- sigma(Main.lm)
+  
+  int_est_beta_1 <- confint(Main.lm)[2,]
+  
+  #Copy the original dataset
+  Main_b <- Main
+  
+  #Remove X from Main dataset
+  Main_b["X"] <- NA
+  
+  #Impute X values of the main dataset
+  b_data <- rbind(Main_b, Sub)
+  b_imp <- mice(b_data, printFlag = F, maxit = 20)
+  
+  # Plot
+  plot(b_imp)
+  
+  # Regression
+  b_reg <- with(b_imp, lm(Y ~ X))
+  b_res <- pool(b_reg)
+  b_res$pooled
+  
+  #Copy the original dataset
+  Main_c <- Main
+  Sub_c <- Sub
+  
+  #Remove X from Main dataset
+  Main_c["X"] <- NA
+  #Remove Y from Sub dataset
+  Sub_c["Y"] <- NA
+  
+  c_data <- rbind(Main_c, Sub_c)
+  c_imp <- mice(c_data, printFlag = F, maxit = 20)
+  
+  # Plot
+  plot(c_imp)
+  
+  # Regression
+  c_reg <- with(c_imp, lm(Y ~ X))
+  c_res <- pool(c_reg)
+  c_res$pooled
+  
+  #Copy the original dataset
+  Main_d <- Main
+  Sub_d <- Sub
+  
+  #Remove X from Main dataset
+  Main_d["X"] <- NA
+  #Remove first 50 obs of Y from Sub dataset
+  Sub_d[1:50, "Y"] <- NA
+  #Remove last 50 obs of W from Sub dataset
+  Sub_d[51:100, "W"] <- NA
+  
+  d_data <- rbind(Main_d, Sub_d)
+  
+  d_imp <- mice(d_data, printFlag = F, maxit = 20)
+  
+  # Plot
+  plot(d_imp)
+  
+  # Regression
+  d_reg <- with(d_imp, lm(Y ~ X))
+  d_res <- pool(d_reg)
+  d_res$pooled
+}
+
 ```
+
+
+
+
 
 
 # task f)
 
 Compare the bias and mean square properties of the estimates of $\beta_0$, $\beta_1$ and $\sigma^2$.
+
+* Bias: 
+
+$$\frac{\text{est}-\text{true}}{\text{true}}$$
 
 ```{r}
 
@@ -142,7 +390,10 @@ Compare the bias and mean square properties of the estimates of $\beta_0$, $\bet
 
 Compute the true value of $\beta_1$ and calculate the actual coverage rate for each method of estimating the confidence interval. Also, calculate the length of the confidence intervals.
 
+* Coverage: Whether true value is within CI of our estimate
+
+
 ```{r}
 
-```
+x```
 
