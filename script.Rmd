@@ -52,8 +52,6 @@ Create a data corresponding to scenario (a) in Figure 8.1 by deleting X from the
 
 ![Figure 8.1.](Figure_8.1.jpg)
 
-* Figure 8.1 not included in the script
-
 ```{r}
 #Copy the original dataset
 Main_b <- Main
@@ -62,7 +60,13 @@ Main_b <- Main
 Main_b["X"] <- NA
 
 #Impute X values of the main dataset
-initImp <- mice(Main_b, maxit = 1)
+b_data <- rbind(Main_b, Sub)
+b_imp <- mice(b_data, printFlag = F, maxit = 20)
+
+# Plot
+plot(b_imp)
+
+# fir
 ```
 
 # task c)
@@ -78,6 +82,12 @@ Sub_c <- Sub
 Main_c["X"] <- NA
 #Remove Y from Sub dataset
 Sub_c["Y"] <- NA
+
+c_data <- rbind(Main_c, Sub_c)
+c_imp <- mice(c_data, printFlag = F, maxit = 20)
+
+# Plot
+plot(c_imp)
 ```
 
 
@@ -94,9 +104,19 @@ Sub_d <- Sub
 #Remove X from Main dataset
 Main_d["X"] <- NA
 #Remove first 50 obs of Y from Sub dataset
-Sub_d[1:50,2] <- NA
+Sub_d[1:50, "Y"] <- NA
 #Remove last 50 obs of W from Sub dataset
-Sub_d[51:100,3] <- NA
+Sub_d[51:100, "W"] <- NA
+
+d_data <- rbind(Main_d, Sub_d)
+
+d_imp <- mice(d_data, printFlag = F, maxit = 20)
+
+# Plot
+plot(d_imp)
+
+# Regression
+d_reg <- with(d_imp, lm())
 ```
 
 
