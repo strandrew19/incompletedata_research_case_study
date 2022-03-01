@@ -27,129 +27,140 @@ colnames(data) <- c("X", "Y", "W")
 
 # task a)
 
-The goal is to infer about the regression coefficient for X in the model $Y = \beta_0 + \beta_1X + \varepsilon , \varepsilon \sim N(0, \sigma^2)$. Set aside the first 900 observations as data from the main study and treat the remaining 100 observations as data from a substudy. Fit the above regression model on the main study data and store the point estimates of $\beta_0$, $\beta_1$ and $\sigma^2$ and the interval estimate of $\beta_1$.
+The goal is to infer about the regression coefficient for X in the model $Y = \beta_0 + \beta_1X + \varepsilon , \varepsilon \sim N(0, \sigma^2)$. Set aside the first 900 observations as data from the main study and treat the remaining 100 observations as data from a substudy. Fit the above regression model on the main study data and store the point estimates of $\beta_0$, $\beta_1$ and $\sigma$ and the interval estimate of $\beta_1$.
 
 ```{r}
 #Set aside first 900 obs as data from main study
-Main <- data %>% slice_head(n = 900)
+main <- data %>% slice_head(n = 900)
 
 #Remaining 100 observations as data from a substudy
-Sub <- data %>% slice_tail(n = 100)
-
-#Fit regression model on the main study 
-Main.lm <- lm(Y ~ X, data = Main)
-beta_0_main <- lm(Y ~ X, data = Main)$coef[1]
-beta_1_main <- lm(Y ~ X, data = Main)$coef[2]
-Sigma_main <- sigma(Main.lm)
-
-int_est_beta_1 <- confint(Main.lm)[2,]
+sub <- data %>% slice_tail(n = 100)
 ```
 
+
+```{r}
+task_a <- function(main, sub){
+  
+  #Fit regression model on the main study 
+  main.lm <- summary(lm(Y ~ X, data = main), conf.int=T)
+  beta_0_main <- main.lm$coef[1,1]
+  beta_0_sigma <- main.lm$coef[1,2]
+  beta_1_main <- main.lm$coef[2,1]
+  beta_1_sigma <- main.lm$coef[2,2]
+  sigma_main <- main.lm$sigma
+  
+  int_est_beta_1 <- confint(lm(Y~X, data =main))[2,]
+  
+  ret <- list("beta_0" = beta_0_main,
+              "beta_0_simga" = beta_0_sigma,
+              "beta_1" = beta_1_main,
+              "beta_1_sigma" = beta_1_sigma,
+              "beta_1_confint" = as.numeric(int_est_beta_1),
+              "sigma" = sigma_main)
+  
+  return(ret)
+}
+
+task_a(main, sub)
+```
 
 # task b)
 
 Create a data corresponding to scenario (a) in Figure 8.1 by deleting X from the main study. Multiply impute the missing values of X in the main study. Perform multiply imputed analysis and again store the point and interval estimates of the same parameters.
 
 ![Figure 8.1.](Figure_8.1.jpg)
+## Computation of residual standard error $\sigma$ difficult for mice, use Rubin's rule
+
 
 ```{r}
-#Copy the original dataset
-Main_b <- Main
+task_b <- function(main, sub, method = "pmm", maxit = 5, m = 5){
+  main["X"] <- NA
+  
+  # Immpute
+  b_data <- rbind(main, sub)
+  b_imp <- mice(b_data, print = F, maxit = maxit, m = m, method = method)
+  
+  # Plot diagnostics
+  plot(b_imp)
+  
+  # Regress
+  b_reg <- with(b_imp, lm(Y~X))
+  b_res <- pool.syn(b_reg) # Use pool.syn as we have synthetic data!
+  b_res_sum <- summary(b_res, conf.int = T)
+  
+  ret <- list("beta_0" = b_res_sum$estimate[1],
+              "beta_0_sigma" = b_res_sum$std.error[1],
+              "beta_1" = b_res_sum$estimate[2],
+              "beta_1_sigma" = b_res_sum$std.error[2],
+              "beta_1_confint" = c(b_res_sum$`2.5 %`[2], b_res_sum$`97.5 %`[2]))
+  
+  return(ret)
+}
 
-#Remove X from Main dataset
-Main_b["X"] <- NA
-
-#Impute X values of the main dataset
-b_data <- rbind(Main_b, Sub)
-b_imp <- mice(b_data, printFlag = F, maxit = 5, method = "pmm")
-
-# Plot
-plot(b_imp)
-
-# Regression
-b_reg <- with(b_imp, lm(Y ~ X))
-b_res <- pool(b_reg)
-b_res$pooled
+task_b(main, sub)
 ```
-
 
 # task c)
 
 Create a data corresponding to scenario (b) by deleting X values from the main study and Y values from the substudy. Multiply impute the missing values of X in the main study. Perform multiply imputed analysis as in (b).
 
+> We tried a lot of things here. 
+
+## First Try: Basic imputation strategy
+
+Initial idea: Impute $f(Y|X,W)$ for 100 missing values, then impute $f(X|W,Y)$ for the remaining cases.
+
+* See slide 194: It is suggested to include the DV into the imputation model
+* Since `mice` only uses the non-imputed values for imputation by default, we can carry this out in one imputation
+
 ```{r}
-#Copy the original dataset
-Main_c <- Main
-Sub_c <- Sub
+task_c_basic <- function(main, sub, method = "pmm", maxit = 5, m = 5, exclude_y_for_x = F){
+  main["X"] <- NA
+  sub["Y"] <- NA
+  
+  c_data <- rbind(main, sub)
+  
+  # Predictor matrix
+  c_pred_mat <- matrix(rep(0, 9), ncol = 3)
+  rownames(c_pred_mat) <- colnames(c_pred_mat) <- c("X", "Y", "W")
+  
+  c_pred_mat["X","W"] <- c_pred_mat["Y","X"] <- c_pred_mat["Y", "W"] <- 1
+  if (!exclude_y_for_x) c_pred_mat["X","Y"] <- 1
+  
+  c_imp <- mice(c_data, print = F, maxit = maxit, m = m, predictorMatrix = c_pred_mat, method = method) 
+  plot(c_imp)
+  
+  c_reg <- with(c_imp, lm(Y ~ X))
+  c_res <- pool.syn(c_reg)
+  c_res_sum <- summary(c_res, conf.int = T)
+  
+  ret <- list("beta_0" = c_res_sum$estimate[1],
+              "beta_0_sigma" = c_res_sum$std.error[1],
+              "beta_1" = c_res_sum$estimate[2],
+              "beta_1_sigma" = c_res_sum$std.error[2],
+              "beta_1_confint" = c(c_res_sum$`2.5 %`[2], c_res_sum$`97.5 %`[2]))
+  
+  return(ret)
+}
 
-#Remove X from Main dataset
-Main_c["X"] <- NA
-#Remove Y from Sub dataset
-Sub_c["Y"] <- NA
-
-### We first tried this ### 
-
-# First step: Impute (Y | X, W) for the 100 missing Y
-# Second step: Impute (X | W) for the 900 missing X
-
-c_data <- rbind(Main_c, Sub_c)
-
-c_imp <- mice(c_data, printFlag = T, maxit = 1, m= 1, method="midastouch")
-c_imp$predictorMatrix
-
-pred_mat2 <- pred_mat1 <- matrix(rep(0, 9), ncol = 3)
-rownames(pred_mat2) <- rownames(pred_mat1) <- colnames(pred_mat2) <- colnames(pred_mat1) <- c("X", "Y", "W")
-
-pred_mat1["Y", "X"] <- 1
-pred_mat1["Y", "W"] <- 1
-
-pred_mat2["X", "W"] <- 1
-pred_mat2["X", "Y"] <- 1
-
-step_1 <- mice(c_data, printFlag = F, maxit = 20, predictorMatrix = pred_mat1, method = "norm")
-c_data$Y <- complete(step_1)$Y
-
-step_2 <- mice(c_data, printFlag = F, maxit = 20, predictorMatrix = pred_mat2, method = "norm") 
-
-# Plot
-plot(step_2)
-
-# Regression
-c_reg <- with(step_2, lm(Y ~ X))
-c_res <- pool(c_reg)
-c_res$pooled
-
-### We can combine it into one matrix ###
-
-pred_mat_one_step <- matrix(rep(0, 9), ncol = 3)
-rownames(pred_mat_one_step) <- colnames(pred_mat_one_step) <- c("X", "Y", "W")
-pred_mat_one_step["X","Y"] <- 1
-pred_mat_one_step["X","W"] <- 1
-pred_mat_one_step["Y","X"] <- 1
-pred_mat_one_step["Y", "W"] <- 1
-
-one_step <- mice(c_data, printFlag = F, maxit = 20, predictorMatrix = pred_mat_one_step, method = "norm") 
-one_step_reg <- with(one_step, lm(Y ~ X))
-one_step_res <- pool(one_step_reg)
-one_step_res$pooled
-
-### We get worse results if we leave out y for x 
-pred_mat_compare <- pred_mat_one_step
-pred_mat_compare["X", "Y"] <- 0
-pred_mat_compare["Y", "W"] <- 0
-
-compare <- mice(c_data, printFlag = F, maxit = 20, predictorMatrix = pred_mat_compare, method = "norm") 
-compare_reg <- with(compare, lm(Y ~ X))
-compare_res <- pool(compare_reg)
-compare_res$pooled
+task_c_basic(main, sub)
 ```
 
-## Stuff Raghunathan talked about in his book
-
-This is how we understand the section from Raghunathan's book: 
+* Even though the results are not good, we can see that they are even worse when excluding $Y$ for the imputation of $X$
 
 ```{r}
-Sub_c
+task_c_basic(main, sub, exclude_y_for_x = T)
+```
+
+## Method Raghunathan talked about in his book
+
+Regunathan describes a method using sampling in his book. We tried to replicate it, but it did not return usable results in our case.
+
+```{r}
+Main_c <- main
+Main_c["X"] <- NA
+Sub_c <- sub
+Sub_c["Y"] <- NA
 
 model <- summary(lm(X ~ W, Sub_c))
 alpha_0 <- model$coefficients["(Intercept)","Estimate"]
@@ -170,223 +181,263 @@ mux_Y_W <- psi_squared * ((beta_1*(mean(Main_c$Y) - beta_0)) / sigma_squared) + 
 
 Main_c$X <- rnorm(900, mean = mux_Y_W, sd = sqrt(psi_squared))
 
-lm(Y ~ X, Main_c)
+summary(lm(Y ~ X, Main_c))
 ```
 
-## Sequential regression
+## Anothery try: Sequential regression
+
+Another method would be to use sequential regression, where we iteratively solve the problem. We used slides 149 - 150 as a basis and used further literature to work this out:
+
+* https://www.tandfonline.com/doi/full/10.1080/01621459.2014.948117
+
+As a convergence criterion we use the squared difference between the current and the last $\beta_0, \beta_1$.  
 
 ```{r}
-pred_map_seq <- matrix(rep(0, 9), ncol = 3)
-rownames(pred_map_seq) <- colnames(pred_map_seq) <- c("X", "Y", "W")
-pred_map_seq["Y", "W"] <- 1
-
-c_sequential <- c_data
-c_sequential$Y <- complete(mice(c_data, method = "pmm", print = F, predictorMatrix = pred_map_seq))$Y
-
-pred_x <- pred_y <- matrix(rep(0, 9), ncol = 3)
-rownames(pred_x) <- colnames(pred_x) <- rownames(pred_y) <- colnames(pred_y) <- c("X", "Y", "W")
-
-pred_x["X", "Y"] <- pred_x["X", "W"] <- 1
-pred_y["Y", "X"] <- pred_y["Y", "W"] <- 1
-
-mean_x <- c(var(c_sequential$X))
-mean_y <- c(var(c_sequential$Y))
-
-x_thresh <- 1
-y_thresh <- 1
-
-i <- 1
-
-thresh <- 0.0001
-
-while(is.na(x_thresh) | x_thresh > thresh & y_thresh > thresh){
-  c_sequential$X <- complete(mice(c_sequential, method = "pmm", printFlag = F, predictorMatrix = pred_x))$X
-  c_sequential$Y <- complete(mice(c_sequential, method = "pmm", printFlag = F, predictorMatrix = pred_y))$Y
+task_c_sequential <- function(main, sub, method = "pmm", maxit = 5, m = 5, thresh = 1e-09, max_iter = 100, print = T){
   
-  mean_x <- append(mean_x, var(c_sequential$X))
-  mean_y <- append(mean_y, var(c_sequential$Y))
+  main["X"] <- NA
+  sub["Y"] <- NA
   
-  i <- i+1
+  c_sequential <- rbind(main, sub)
+
+  # Initialize: Predict Y values via hot deck
+  pred_map_seq <- matrix(rep(0, 9), ncol = 3)
+  rownames(pred_map_seq) <- colnames(pred_map_seq) <- c("X", "Y", "W")
+  pred_map_seq["Y", "W"] <- 1
   
-  x_thresh <- abs(mean_x[i-1] - mean_x[i])
-  y_thresh <- abs(mean_y[i-1] - mean_y[i])
+  init_mi <- mice(c_sequential, method = "sample", print = F, predictorMatrix = pred_map_seq)
+  init_reg <- pool(with(init_mi, lm(Y~X)))
+  
+  # Fill estimated values with complete 
+  c_sequential$Y <- complete(init_mi)$Y
+  
+  # Compute initial regression weights
+  current_weights <- init_reg$pooled$estimate
+  beta_0_archive <- c(current_weights[1])
+  beta_1_archive <- c(current_weights[2])
+  
+  # Initialize old weights as arbitrary
+  old_weights <- c(1,1)
+  
+  convergence_val <- sum((current_weights - old_weights)^2)
+  
+  pred_x <- pred_y <- matrix(rep(0, 9), ncol = 3)
+  rownames(pred_x) <- colnames(pred_x) <- rownames(pred_y) <- colnames(pred_y) <- c("X", "Y", "W")
+  
+  pred_x["X", "Y"] <- pred_x["X", "W"] <- 1
+  pred_y["Y", "X"] <- pred_y["Y", "W"] <- 1
+  
+  n_runs <- 1
+  while (n_runs <= max_iter & convergence_val > thresh){
+    c_sequential$X <- complete(mice(c_sequential, method = method, m = m, maxit = maxit, printFlag = F, predictorMatrix = pred_x))$X
+    c_sequential$Y <- complete(mice(c_sequential, method = method, m = m, maxit = maxit, printFlag = F, predictorMatrix = pred_y))$Y
+    
+    c_sequential_imp <- mice(c_sequential, method = method, m = m, maxit = maxit, printFlag = F)
+    plot(c_sequential_imp)
+    
+    c_sequential_reg <- pool(with(c_sequential_imp, lm(Y~X)))
+    
+    old_weights <- current_weights
+    
+    current_weights <- c_sequential_reg$pooled$estimate
+    beta_0_archive <- append(beta_0_archive, current_weights[1])
+    beta_1_archive <- append(beta_1_archive, current_weights[2])
+    
+    convergence_val <- sum((current_weights - old_weights)^2)
+    
+    if (print) print(sprintf("Iteration %d: Convergence value %.6f", n_runs, convergence_val))
+
+    n_runs <- n_runs + 1
+  }
+  
+  c_sequential_res_sum <- summary(c_sequential_reg, conf.int = T)
+  
+  ret <- list("beta_0" = c_sequential_res_sum$estimate[1],
+              "beta_0_sigma" = c_sequential_res_sum$std.error[1],
+              "beta_1" = c_sequential_res_sum$estimate[2],
+              "beta_1_sigma" = c_sequential_res_sum$std.error[2],
+              "beta_1_confint" = c(c_sequential_res_sum$`2.5 %`[2], c_sequential_res_sum$`97.5 %`[2]))
+  
+  return(ret)
 }
 
-print(i)
-
-lm(Y ~ X, c_sequential)
+task_c_sequential(main, sub)
 ```
 
+## Another try: CART
 
+https://academic.oup.com/aje/article/172/9/1070/148540 uses sequential regression via CART. They show that it works well, so we decided to try it out too - but it does not lead to better results.
+
+```{r}
+task_c_basic(main, sub, method = "cart")
+```
 
 # task d)
 
-Create a data corresponding to scenario (c) by deleting X on the main study, Y from the first 50 subjects in the substudy 172 Missing Data Analysis in Practice
-and W from the last 50 subjects. Perform multiply imputed analysis as in (b).
+Create a data corresponding to scenario (c) by deleting X on the main study, Y from the first 50 subjects in the substudy and W from the last 50 subjects. Perform multiply imputed analysis as in (b).
+
+## First idea: Simply impute
+
+Since we have some observations for each variable combination ($(X,Y), (Y,W), (X,W)$), we should be able to get good results through basic imputation.
 
 ```{r}
-#Copy the original dataset
-Main_d <- Main
-Sub_d <- Sub
+task_d_basic <- function(main, sub, method = "pmm", maxit = 5, m = 5){
+  main["X"] <- NA
+  sub[1:50, "Y"] <- NA
+  sub[51:100, "W"] <- NA
+  
+  d_data <- rbind(main, sub)
+  
+  d_imp <- mice(d_data, print = F, maxit = maxit, m = m, method = method) 
+  plot(d_imp)
+  
+  d_reg <- with(d_imp, lm(Y ~ X))
+  d_res <- pool.syn(d_reg)
+  d_res_sum <- summary(d_res, conf.int = T)
+  
+  ret <- list("beta_0" = d_res_sum$estimate[1],
+              "beta_0_sigma" = d_res_sum$std.error[1],
+              "beta_1" = d_res_sum$estimate[2],
+              "beta_1_sigma" = d_res_sum$std.error[2],
+              "beta_1_confint" = c(d_res_sum$`2.5 %`[2], d_res_sum$`97.5 %`[2]))
+  
+  return(ret)
+}
 
-#Remove X from Main dataset
-Main_d["X"] <- NA
-#Remove first 50 obs of Y from Sub dataset
-Sub_d[1:50, "Y"] <- NA
-#Remove last 50 obs of W from Sub dataset
-Sub_d[51:100, "W"] <- NA
-
-d_data <- rbind(Main_d, Sub_d)
-
-d_imp <- mice(d_data, printFlag = F, maxit = 20)
-
-# Plot
-plot(d_imp)
-
-# Regression
-d_reg <- with(d_imp, lm(Y ~ X))
-d_res <- pool(d_reg)
-d_res$pooled
+task_d_basic(main, sub)
 ```
+
+## Another idea: Sequentially complete sub, then main
+
+Similar to what we did in C: First impute the missing values in sub, then impute the missing values in main. Steps: 
+
+1. Use $n=900$ Y from main to impute $n = 50$ W in sub
+2. Use W to impute $n = 50$ Y in sub and $n = 100$ X 
+3. Use both to impute $n = 900$ X in main
 
 ```{r}
-Main_d <- Main
-Sub_d <- Sub
+task_d_sequential <- function(main, sub, method = "pmm", maxit = 5, m = 5){
+  main["X"] <- NA
+  sub[1:50, "Y"] <- NA
+  sub[51:100, "W"] <- NA
+  
+  d_data <- rbind(main, sub)
+  
+  # First step: Impute W based on Y
+  pred_map_step_one <- matrix(rep(0, 9), ncol = 3)
+  rownames(pred_map_step_one) <- colnames(pred_map_step_one) <- c("X", "Y", "W")
+  pred_map_step_one["W", "Y"] <- 1
+  
+  step_one <- mice(d_data, method = method, predictorMatrix = pred_map_step_one, m = m, maxit = maxit, printFlag = F)
+  d_data$W <- complete(step_one)$W
+  
+  # Second step: Impute Y based on W, X
+  pred_map_step_two <- matrix(rep(0, 9), ncol = 3)
+  rownames(pred_map_step_two) <- colnames(pred_map_step_two) <- c("X", "Y", "W")
+  pred_map_step_two["Y", "W"] <- pred_map_step_two["Y", "X"] <- 1
+  
+  step_two <- mice(d_data, method = method, predictorMatrix = pred_map_step_two, m = m, maxit = maxit, printFlag = F)
+  d_data$Y <- complete(step_two)$Y
+  
+  # Third step: Impute X based on W, Y
+  pred_map_step_three <- matrix(rep(0, 9), ncol = 3)
+  rownames(pred_map_step_three) <- colnames(pred_map_step_three) <- c("X", "Y", "W")
+  pred_map_step_three["X", "Y"] <- pred_map_step_three["X", "W"] <- 1
+  
+  step_three <- mice(d_data, method = method, predictorMatrix = pred_map_step_three, m = m, maxit = maxit, printFlag = F)
+  d_data$X <- complete(step_three)$X
+  
+  d_reg <- with(step_three, lm(Y ~ X))
+  d_res <- pool.syn(d_reg)
+  d_res_sum <- summary(d_res, conf.int = T)
+  
+  ret <- list("beta_0" = d_res_sum$estimate[1],
+              "beta_0_sigma" = d_res_sum$std.error[1],
+              "beta_1" = d_res_sum$estimate[2],
+              "beta_1_sigma" = d_res_sum$std.error[2],
+              "beta_1_confint" = c(d_res_sum$`2.5 %`[2], d_res_sum$`97.5 %`[2]))
+  
+  return(ret)
+}
 
-#Remove X from Main dataset
-Main_d["X"] <- NA
-#Remove first 50 obs of Y from Sub dataset
-Sub_d[1:50, "Y"] <- NA
-#Remove last 50 obs of W from Sub dataset
-Sub_d[51:100, "W"] <- NA
-
-Sub_d_complete <- complete(mice(Sub_d, print = F))
-
-data_d <- rbind(Main_d, Sub_d_complete)
-
-data_d_impute <- mice(data_d, print = F)
-
-d_reg <- with(data_d_impute, lm(Y ~ X))
-d_res <- pool(d_reg)
-d_res$pooled
+task_d_sequential(main, sub)
 ```
 
-
+Surprisingly, this actually leads to way worse results.
 
 # task e)
 
 Generate new samples and repeat the process (a) to (d), 250 times.
 
 ```{r}
+n <- 250
+names <- c("a", "b", "c_1", "c_2", "c_3", "d_1", "d_2")
 
-colnames <- c("beta_0", "beta_1", "b_estimate_0_pmm", "b_estimate_1_pmm", "b_estimate_0_midas", "b_estimate_1_midas", "b_estimate_0_norm" , "b_estimate_1_norm", "c_estimate_0_pmm", "c_estimate_1_pmm", "c_estimate_0_midas", "c_estimate_1_midas", "c_estimate_0_norm", "c_estimate_1_norm", "d_estimate_0_pmm", "d_estimate_1_pmm", "d_estimate_0_midas", "d_estimate_1_midas", "d_estimate_0_norm", "d_estimate_1_norm")
+values <- vector(mode = "list", length = length(names))
+names(values) <- names
 
-coefs <- data.frame(matrix(ncol=length(colnames),nrow=0, dimnames=list(NULL, colnames)))
-
-methods <- c("pmm", "norm", "midastouch")
-
-for (i in 1:250){
+for (i in 1:n){
+  #print(sprintf("Run %d", i))
   set.seed(i)
-  data <- mvrnorm(1000, avg, vcm) %>% data.frame()
-  colnames(data) <- c("X", "Y", "W")
   
-  #Set aside first 900 obs as data from main study
-  Main <- data %>% slice_head(n = 900)
-  
-  #Remaining 100 observations as data from a substudy
-  Sub <- data %>% slice_tail(n = 100)
-  
-  #Fit regression model on the main study 
-  Main.lm <- lm(Y ~ X, data = Main)
-  beta_0_main <- lm(Y ~ X, data = Main)$coef[1]
-  beta_1_main <- lm(Y ~ X, data = Main)$coef[2]
-  Sigma_main <- sigma(Main.lm)
-  
-  int_est_beta_1 <- confint(Main.lm)[2,]
-  
-  #Copy the original dataset
-  Main_b <- Main
-  
-  #Remove X from Main dataset
-  Main_b["X"] <- NA
-  
-  #Impute X values of the main dataset
-  b_data <- rbind(Main_b, Sub)
-  b_imp <- mice(b_data, printFlag = F, maxit = 20)
-  
-  # Plot
-  plot(b_imp)
-  
-  # Regression
-  b_reg <- with(b_imp, lm(Y ~ X))
-  b_res <- pool(b_reg)
-  b_res$pooled
-  
-  #Copy the original dataset
-  Main_c <- Main
-  Sub_c <- Sub
-  
-  #Remove X from Main dataset
-  Main_c["X"] <- NA
-  #Remove Y from Sub dataset
-  Sub_c["Y"] <- NA
-  
-  c_data <- rbind(Main_c, Sub_c)
-  c_imp <- mice(c_data, printFlag = F, maxit = 20)
-  
-  # Plot
-  plot(c_imp)
-  
-  # Regression
-  c_reg <- with(c_imp, lm(Y ~ X))
-  c_res <- pool(c_reg)
-  c_res$pooled
-  
-  #Copy the original dataset
-  Main_d <- Main
-  Sub_d <- Sub
-  
-  #Remove X from Main dataset
-  Main_d["X"] <- NA
-  #Remove first 50 obs of Y from Sub dataset
-  Sub_d[1:50, "Y"] <- NA
-  #Remove last 50 obs of W from Sub dataset
-  Sub_d[51:100, "W"] <- NA
-  
-  d_data <- rbind(Main_d, Sub_d)
-  
-  d_imp <- mice(d_data, printFlag = F, maxit = 20)
-  
-  # Plot
-  plot(d_imp)
-  
-  # Regression
-  d_reg <- with(d_imp, lm(Y ~ X))
-  d_res <- pool(d_reg)
-  d_res$pooled
+  values$a[[i]]   <- task_a(main, sub)
+  values$b[[i]]   <- task_b(main, sub)
+  values$c_1[[i]] <- task_c_basic(main, sub)
+  values$c_2[[i]] <- task_c_sequential(main, sub, print = F)
+  values$c_3[[i]] <- task_c_basic(main, sub, method = "cart")
+  values$d_1[[i]] <- task_d_basic(main, sub)
+  values$d_2[[i]] <- task_d_sequential(main, sub)
 }
-
 ```
-
-
-
-
-
 
 # task f)
 
 Compare the bias and mean square properties of the estimates of $\beta_0$, $\beta_1$ and $\sigma^2$.
+
+* **TO DO**: Mean square properties! (No idea yet)
 
 * Bias: 
 
 $$\frac{\text{est}-\text{true}}{\text{true}}$$
 
 ```{r}
+bias <- function(est, true){
+  return((est - true) / true)
+}
 
+bias_values_b0 <- bias_values_b1 <- data.frame(matrix(ncol = length(names)-1, nrow = n)) 
+colnames(bias_values_b0) <- colnames(bias_values_b1) <- names[2:length(names)]
+
+for (name in names[2:length(names)]){
+  for (i in 1:n){
+    bias_values_b0[i, name] <- bias(values[[name]][[i]]$beta_0, values[["a"]][[i]]$beta_0)
+    bias_values_b1[i, name] <- bias(values[[name]][[i]]$beta_1, values[["a"]][[i]]$beta_1)
+  }
+}
+```
+
+We plotted the data: 
+
+```{r}
+bias_values_b0$beta <- "beta0"
+bias_values_b1$beta <- "beta1"
+
+bias_b0_long <- pivot_longer(bias_values_b0, cols = -c(beta))
+bias_b1_long <- pivot_longer(bias_values_b1, cols = -c(beta))
+
+bias_data <- rbind(bias_b0_long, bias_b1_long)
+
+ggplot(bias_data, aes(x = name, y = value)) + 
+  geom_boxplot() + 
+  facet_wrap(~beta) +
+  theme_minimal() + 
+  ggtitle("Bias")
 ```
 
 
 # task g)
+
+* **TO DO**: We need to figure out whether we correctly computed the true value!
 
 Compute the true value of $\beta_1$ and calculate the actual coverage rate for each method of estimating the confidence interval. Also, calculate the length of the confidence intervals.
 
@@ -394,6 +445,26 @@ Compute the true value of $\beta_1$ and calculate the actual coverage rate for e
 
 
 ```{r}
+coverage <- function(CI, true){
+  return(as.numeric(CI[1] <= true & true <= CI[2]))
+}
 
-x```
+coverage_values <- data.frame(matrix(ncol = length(names)-1, nrow = n)) 
+colnames(coverage_values) <- names[2:length(names)]
+
+for (name in names[2:length(names)]){
+  for (i in 1:n){
+    coverage_values[i, name] <- coverage(values[[name]][[i]]$beta_1_confint, values[["a"]][[i]]$beta_1)
+  }
+}
+
+coverage_values$index <- 1:n
+coverage_long <- pivot_longer(coverage_values, cols = -c(index))
+
+ggplot(data = coverage_long, aes(x = name, y = value/n)) +
+  geom_bar(stat = "identity") + 
+  xlab("method") +
+  ylab("Density") + 
+  theme_minimal()
+```
 
