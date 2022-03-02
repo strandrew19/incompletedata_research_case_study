@@ -370,7 +370,7 @@ Surprisingly, this actually leads to way worse results.
 Generate new samples and repeat the process (a) to (d), 250 times.
 
 ```{r}
-n <- 250
+n <- 10
 names <- c("a", "b", "c_1", "c_2", "c_3", "d_1", "d_2")
 
 values <- vector(mode = "list", length = length(names))
