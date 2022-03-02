@@ -13,6 +13,7 @@ library(MASS)
 library(mice)
 library(VIM)
 library(tidyverse)
+library(ggpubr)
 
 set.seed(420)
 
@@ -25,7 +26,7 @@ colnames(data) <- c("X", "Y", "W")
 
 maxit_ <- 20 
 m_ <- 5
-method_ <- "midastouch" # Use midas touch as it is best for small donor pools
+method_ <- "pmm" # Use midas touch as it is best for small donor pools
 ```
 
 # task a)
@@ -141,7 +142,6 @@ gen_relevant_vals <- function(summary, mids){
 Create a data corresponding to scenario (a) in Figure 8.1 by deleting X from the main study. Multiply impute the missing values of X in the main study. Perform multiply imputed analysis and again store the point and interval estimates of the same parameters.
 
 ![Figure 8.1.](Figure_8.1.jpg)
-## Computation of residual standard error $\sigma$ difficult for mice, use Rubin's rule
 
 
 ```{r}
@@ -171,6 +171,89 @@ task_b(main, sub)
 # task c)
 
 Create a data corresponding to scenario (b) by deleting X values from the main study and Y values from the substudy. Multiply impute the missing values of X in the main study. Perform multiply imputed analysis as in (b).
+
+## My suggestion
+
+> My suggestion: We say that it is impossible to impute properly in this case, and here is why: 
+
+In ![Van Buuren (2013)](https://stefvanbuuren.name/fimd/sec-FCS.html) they say that it is important to be able to estimate the true correlation between the missing variables. Since we have no observations in which both $X$ and $Y$ are observed together, this is basically impossible: 
+
+We have 'true' correlations between variables: 
+
+* $\rho(X,Y) \approx .697$
+* $\rho(X,W) \approx .838$
+* $\rho(Y,W) \approx .491$
+
+```{r}
+knitr::kable(cor(data))
+```
+
+We can run simple simulation to shhow that the estimations don't converge for our methods, even for high number of iterations (which is what is suggested by Van Buuren). 
+
+```{r, fig.width = 8, fig.height=6}
+d_data <- data
+d_data[1:900, "X"] <- NA
+d_data[901:1000, "Y"] <- NA
+
+# Initial: Hot Deck
+
+step_one_pred <- gen_pred_mat()
+step_one_pred["Y", "W"] <- step_one_pred["X", "W"] <- 1
+
+mice_mod <- mice(d_data, method = "sample", maxit = 1, m = 1, predictorMatrix = step_one_pred)
+
+maxit <- c(1, 5, 10, 25, 50, 100, 250)
+methods <- c("pmm", "norm", "midastouch")
+
+cor_vals <- beta_1_vals <-  matrix(data = NA, nrow = length(maxit), ncol = length(methods))
+
+for (iter in 1:length(maxit)){
+  for (method in 1:length(methods)){
+    imputed <- mice(d_data, method = methods[method], m = 5, maxit = maxit[iter], print = F)
+    cor_x_y <- unlist(with(imputed, cor(X, Y))$analyses)
+    regression <- pool(with(imputed, lm(Y~X)))
+    cor_vals[iter, method] <- mean(cor_x_y)
+    beta_1_vals[iter, method] <- gen_relevant_vals(summary(regression), imputed)$beta_1
+  }
+}
+
+cor_vals <- data.frame(cor_vals)
+cor_vals$maxit <- maxit
+colnames(cor_vals) <- c(methods, "maxit")
+
+reg_vals <- data.frame(beta_1_vals)
+reg_vals$maxit <- maxit
+colnames(reg_vals) <- c(methods, "maxit")
+
+cor_vals_long <- pivot_longer(cor_vals, -maxit)
+reg_vals_long <- pivot_longer(reg_vals, -maxit)
+
+true_cor <- cor(data$X, data$Y)
+true_beta1 <- lm(Y ~ X, data)$coefficients[2] %>% as.numeric()
+
+cor_plot <- ggplot(data = cor_vals_long, aes(x = maxit, y = value, color = name)) + 
+  geom_line(lty = 4) + 
+  geom_point() + 
+  geom_hline(yintercept = true_cor, color = "red") +
+  theme_minimal() +
+  ylab("cor(X,Y)") +
+  xlab("Maximum number of iterations") + 
+  ggtitle("Correlation (X,Y)")
+
+reg_plot <- ggplot(data = reg_vals_long, aes(x = maxit, y = value, color = name)) + 
+  geom_line(lty = 4) + 
+  geom_point() + 
+  geom_hline(yintercept = true_beta1, color = "red") +
+  theme_minimal() +
+  ylab("beta1") +
+  xlab("Maximum number of iterations") +
+  ggtitle("Regression weight beta1")
+
+ggarrange(cor_plot, reg_plot, ncol = 1)
+```
+
+We can then say that we tried a lot of different methods including sequential regression and then skip ahead to the analysis graphics below.
+
 
 > We tried a lot of things here. 
 
@@ -344,7 +427,7 @@ task_d_sequential <- function(main, sub, method = method_, maxit = maxit_, m = m
   pred_map_step_one <- gen_pred_mat()
   pred_map_step_one["W", "Y"] <- 1
   
-  step_one <- mice(d_data, method = method, predictorMatrix = pred_map_step_one, m = m, maxit = maxit, printFlag = F)
+  step_one <- mice(d_data, method = method_, m = m_, predictorMatrix = pred_map_step_one, maxit = maxit_, printFlag = F)
 
   d_data$W <- complete(step_one)$W
   
@@ -352,14 +435,14 @@ task_d_sequential <- function(main, sub, method = method_, maxit = maxit_, m = m
   pred_map_step_two <- gen_pred_mat()
   pred_map_step_two["Y", "W"] <- pred_map_step_two["Y", "X"] <- 1
   
-  step_two <- mice(d_data, method = method, predictorMatrix = pred_map_step_two, m = m, maxit = maxit, printFlag = F)
+  step_two <- mice(d_data, method = method, m = m, maxit = maxit, printFlag = F)
   d_data$Y <- complete(step_two)$Y
   
   # Third step: Impute X based on W, Y
   pred_map_step_three <- gen_pred_mat()
   pred_map_step_three["X", "Y"] <- pred_map_step_three["X", "W"] <- 1
   
-  step_three <- mice(d_data, method = method, predictorMatrix = pred_map_step_three, m = m, maxit = maxit, printFlag = F)
+  step_three <- mice(d_data, method = method,m = m, maxit = maxit, printFlag = F)
   d_data$X <- complete(step_three)$X
   
   d_reg <- with(step_three, lm(Y ~ X))
@@ -381,7 +464,7 @@ Surprisingly, this actually leads to way worse results.
 Generate new samples and repeat the process (a) to (d), 250 times.
 
 ```{r}
-n <- 10
+n <- 250
 names <- c("a", "b", "c_1", "c_2", "c_3", "d_1", "d_2")
 
 values <- vector(mode = "list", length = length(names))
@@ -390,6 +473,9 @@ names(values) <- names
 for (i in 1:n){
   print(sprintf("Run %d", i))
   set.seed(i)
+  
+  data <- mvrnorm(1000, avg, vcm) %>% data.frame()
+  colnames(data) <- c("X", "Y", "W")
   
   values$a[[i]]   <- task_a(main, sub)
   values$b[[i]]   <- task_b(main, sub)
